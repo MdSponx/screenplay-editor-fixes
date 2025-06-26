@@ -17,13 +17,6 @@ interface MultiBlockSelection {
   endBlock: string | null;
   endOffset: number;
   selectedText: string;
-  selectedBlocks: Block[];
-}
-
-interface ClipboardData {
-  blocks: Block[];
-  text: string;
-  timestamp: number;
 }
 
 export const useBlockHandlersImproved = (
@@ -56,21 +49,10 @@ export const useBlockHandlersImproved = (
     startOffset: 0,
     endBlock: null,
     endOffset: 0,
-    selectedText: '',
-    selectedBlocks: []
+    selectedText: ''
   });
-  
-  // New refs for tracking character block behavior after dialogue
-  const characterBlockAfterDialogue = useRef<Set<string>>(new Set());
-  const characterBlockEnterCount = useRef<Record<string, number>>({});
-  
-  // New refs for drag selection
-  const dragStartPosition = useRef({ x: 0, y: 0 });
-  const dragCurrentPosition = useRef({ x: 0, y: 0 });
-  const isDragSelecting = useRef(false);
-  const dragSelectionBlocks = useRef<Set<string>>(new Set());
 
-  // Enhanced focus management utility
+  // Enhanced focus management with retry mechanism
   const setFocusWithRetry = useCallback((blockId: string, cursorPosition: 'start' | 'end' | number = 'start', maxRetries = 3) => {
     let retryCount = 0;
     
@@ -83,100 +65,70 @@ export const useBlockHandlersImproved = (
         }
         return;
       }
-
-      // Ensure element is focusable
-      if (!el.hasAttribute('contenteditable')) {
-        el.setAttribute('contenteditable', 'true');
-      }
-
-      // Focus the element
+      
       el.focus();
-
-      // Set cursor position with enhanced reliability
-      try {
-        const range = document.createRange();
-        const selection = window.getSelection();
+      
+      const range = document.createRange();
+      const selection = window.getSelection();
+      
+      if (!selection) return;
+      
+      // Ensure there's a text node to work with
+      if (!el.firstChild) {
+        const textNode = document.createTextNode('');
+        el.appendChild(textNode);
+      }
+      
+      let textNode = el.firstChild;
+      if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+        const textLength = textNode.textContent?.length || 0;
         
-        if (!selection) return;
-
-        // Ensure there's content to work with
-        if (!el.firstChild) {
-          const textNode = document.createTextNode('');
-          el.appendChild(textNode);
-        }
-
-        let textNode = el.firstChild;
-        
-        // Find the first text node if the first child isn't a text node
-        while (textNode && textNode.nodeType !== Node.TEXT_NODE) {
-          textNode = textNode.firstChild || textNode.nextSibling;
-        }
-
-        if (!textNode) {
-          // Create a text node if none exists
-          textNode = document.createTextNode('');
-          el.appendChild(textNode);
-        }
-
-        const textContent = textNode.textContent || '';
-        let position = 0;
-
-        if (cursorPosition === 'end') {
-          position = textContent.length;
-        } else if (cursorPosition === 'start') {
-          position = 0;
+        if (cursorPosition === 'start') {
+          range.setStart(textNode, 0);
+          range.setEnd(textNode, 0);
+        } else if (cursorPosition === 'end') {
+          range.setStart(textNode, textLength);
+          range.setEnd(textNode, textLength);
         } else if (typeof cursorPosition === 'number') {
-          position = Math.min(cursorPosition, textContent.length);
+          const pos = Math.min(cursorPosition, textLength);
+          range.setStart(textNode, pos);
+          range.setEnd(textNode, pos);
         }
-
-        range.setStart(textNode, position);
-        range.setEnd(textNode, position);
         
         selection.removeAllRanges();
         selection.addRange(range);
-
-        // Verify focus was successful
-        if (document.activeElement !== el && retryCount < maxRetries) {
-          retryCount++;
-          setTimeout(attemptFocus, 10 * retryCount);
-        }
-      } catch (error) {
-        console.error('Error setting cursor position:', error);
-        // Fallback: just focus the element
-        el.focus();
       }
     };
-
-    // Use requestAnimationFrame for better timing
+    
     requestAnimationFrame(attemptFocus);
   }, [blockRefs]);
 
-  // Enhanced action block creation after scene heading
+  // Create action block after scene heading
   const createActionBlockAfterSceneHeading = useCallback((sceneHeadingBlockId: string) => {
-    const currentIndex = state.blocks.findIndex(b => b.id === sceneHeadingBlockId);
-    if (currentIndex === -1) return null;
-
     const actionBlockId = `action-${uuidv4()}`;
-    const actionBlock: Block = {
+    const actionBlock = {
       id: actionBlockId,
       type: 'action',
       content: '',
     };
 
     const updatedBlocks = [...state.blocks];
-    updatedBlocks.splice(currentIndex + 1, 0, actionBlock);
+    const currentIndex = state.blocks.findIndex(b => b.id === sceneHeadingBlockId);
     
-    updateBlocks(updateBlockNumbers(updatedBlocks));
-    
-    if (setHasChanges) {
-      setHasChanges(true);
+    if (currentIndex !== -1) {
+      updatedBlocks.splice(currentIndex + 1, 0, actionBlock);
+      updateBlocks(updatedBlocks);
+      
+      if (setHasChanges) {
+        setHasChanges(true);
+      }
     }
 
-    // Enhanced focus management for action block
+    // Set focus to the new action block
     setTimeout(() => {
       setFocusWithRetry(actionBlockId, 'start');
-    }, 50); // Slightly longer delay for scene heading processing
-
+    }, 50);
+    
     return actionBlockId;
   }, [state.blocks, updateBlocks, setHasChanges, setFocusWithRetry]);
 
@@ -195,6 +147,15 @@ export const useBlockHandlersImproved = (
     
     return current instanceof HTMLElement ? current.getAttribute('data-block-id') : null;
   };
+
+  // Check if a character block was created after dialogue
+  const isCharacterBlockAfterDialogue = useCallback((blockId: string): boolean => {
+    const blockIndex = state.blocks.findIndex(b => b.id === blockId);
+    if (blockIndex <= 0) return false;
+    
+    const prevBlock = state.blocks[blockIndex - 1];
+    return prevBlock.type === 'dialogue';
+  }, [state.blocks]);
 
   const handleEnterKey = useCallback((blockId: string, element: HTMLDivElement): string => {
     const selection = window.getSelection();
@@ -218,13 +179,23 @@ export const useBlockHandlersImproved = (
     // Special handling for transitions: immediately create a new scene heading block
     if (currentBlock.type === 'transition') {
         const newSceneId = `scene-${uuidv4()}`;
+        const actionBlockId = `action-${uuidv4()}`;
         
-        const newBlock: Block = {
+        // Create scene heading block with smart default
+        const sceneHeadingBlock: Block = {
             id: newSceneId,
             type: 'scene-heading',
+            content: 'INT. LOCATION - DAY',
+        };
+
+        // Create action block immediately after scene heading
+        const actionBlock: Block = {
+            id: actionBlockId,
+            type: 'action',
             content: '',
         };
 
+        // Insert both blocks and focus action block for immediate writing
         const updatedBlocks = [...state.blocks];
         const currentIndex = state.blocks.findIndex((b) => b.id === blockId);
         
@@ -240,17 +211,18 @@ export const useBlockHandlersImproved = (
           };
         }
 
-        updatedBlocks.splice(currentIndex + 1, 0, newBlock);
+        updatedBlocks.splice(currentIndex + 1, 0, sceneHeadingBlock, actionBlock);
         updateBlocks(updateBlockNumbers(updatedBlocks));
 
         if (setHasChanges) {
             setHasChanges(true);
         }
 
+        // Focus the action block so user can start writing immediately
         setTimeout(() => {
-            setFocusWithRetry(newBlock.id, 'start');
+            setFocusWithRetry(actionBlock.id, 'start');
         }, 0);
-        return newBlock.id;
+        return actionBlock.id;
     }
 
     // ========== CHARACTER BLOCK LOGIC ==========
@@ -258,155 +230,54 @@ export const useBlockHandlersImproved = (
         const currentIndex = state.blocks.findIndex(b => b.id === blockId);
         if (currentIndex === -1) return blockId;
 
-        // Check if this character block was created after dialogue (special behavior)
-        const isCharacterAfterDialogue = characterBlockAfterDialogue.current.has(blockId);
-
-        if (isCharacterAfterDialogue) {
-            // NEW BEHAVIOR: Character block created after dialogue
+        // Check if the character block is empty
+        if (textBefore.trim() === '' && textAfter.trim() === '') {
+            // Empty character block - check what's next to toggle between dialogue and action
+            const nextBlock = state.blocks[currentIndex + 1];
+            let newBlockType: string;
             
-            // Track Enter key presses for this block
-            const currentEnterCount = characterBlockEnterCount.current[blockId] || 0;
-            characterBlockEnterCount.current[blockId] = currentEnterCount + 1;
-
-            // If this is the second Enter press, convert to action block
-            if (characterBlockEnterCount.current[blockId] >= 2) {
-                const newBlockId = `block-${uuidv4()}`;
-                const newBlock: Block = {
-                    id: newBlockId,
-                    type: 'action',
-                    content: textAfter.trim(),
-                };
-
-                const updatedBlocks = [...state.blocks];
-                
-                // If character block has content, keep it; otherwise replace it
-                if (textBefore.trim() !== '') {
-                    updatedBlocks[currentIndex] = {
-                        ...currentBlock,
-                        content: textBefore.trim().toUpperCase(),
-                    };
-                    updatedBlocks.splice(currentIndex + 1, 0, newBlock);
-                } else {
-                    updatedBlocks.splice(currentIndex, 1, newBlock);
-                }
-                
-                // Clean up tracking for this block
-                characterBlockAfterDialogue.current.delete(blockId);
-                delete characterBlockEnterCount.current[blockId];
-                
-                updateBlocks(updateBlockNumbers(updatedBlocks));
-                if (setHasChanges) {
-                    setHasChanges(true);
-                }
-
-                setTimeout(() => {
-                    setFocusWithRetry(newBlock.id, 'start');
-                }, 0);
-                return newBlock.id;
+            if (nextBlock && nextBlock.type === 'dialogue') {
+                newBlockType = 'action';
             } else {
-                // First Enter press - do nothing, just wait for user input or second Enter
-                // Don't create any new blocks, just stay in the character block
-                return blockId;
+                newBlockType = 'dialogue';
             }
-        } else {
-            // ORIGINAL BEHAVIOR: Character block not created after dialogue
+
+            const newBlockId = `block-${uuidv4()}`;
+            const newBlock: Block = {
+                id: newBlockId,
+                type: newBlockType,
+                content: '',
+            };
+
+            const updatedBlocks = [...state.blocks];
+            updatedBlocks.splice(currentIndex, 1, newBlock); // Replace character block
             
-            // Check if the character block is empty
-            if (textBefore.trim() === '' && textAfter.trim() === '') {
-                // Empty character block - check what's next to toggle between dialogue and action
-                const nextBlock = state.blocks[currentIndex + 1];
-                let newBlockType: string;
-                
-                if (nextBlock && nextBlock.type === 'dialogue') {
-                    newBlockType = 'action';
-                } else {
-                    newBlockType = 'dialogue';
-                }
-
-                const newBlockId = `block-${uuidv4()}`;
-                const newBlock: Block = {
-                    id: newBlockId,
-                    type: newBlockType,
-                    content: '',
-                };
-
-                const updatedBlocks = [...state.blocks];
-                updatedBlocks.splice(currentIndex, 1, newBlock); // Replace character block
-                
-                updateBlocks(updateBlockNumbers(updatedBlocks));
-                if (setHasChanges) {
-                    setHasChanges(true);
-                }
-
-                setTimeout(() => {
-                    setFocusWithRetry(newBlock.id, 'start');
-                }, 0);
-                return newBlock.id;
+            updateBlocks(updateBlockNumbers(updatedBlocks));
+            if (setHasChanges) {
+                setHasChanges(true);
             }
 
-            // Character block with content
-            if (isDoubleEnter) {
-                // Double enter: create action block
-                const newBlockId = `block-${uuidv4()}`;
-                const newBlock: Block = {
-                    id: newBlockId,
-                    type: 'action',
-                    content: textAfter.trim(),
-                };
-
-                const updatedBlocks = [...state.blocks];
-                updatedBlocks[currentIndex] = {
-                    ...currentBlock,
-                    content: textBefore.trim().toUpperCase(),
-                };
-                updatedBlocks.splice(currentIndex + 1, 0, newBlock);
-                
-                updateBlocks(updateBlockNumbers(updatedBlocks));
-                if (setHasChanges) {
-                    setHasChanges(true);
+            setTimeout(() => {
+                const el = blockRefs.current[newBlock.id];
+                if (el) {
+                    el.focus();
+                    const range = document.createRange();
+                    const textNode = el.firstChild || el;
+                    range.setStart(textNode, 0);
+                    range.collapse(true);
+                    const selection = window.getSelection();
+                    if (selection) {
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                    }
                 }
-
-                setTimeout(() => {
-                    setFocusWithRetry(newBlock.id, 'start');
-                }, 0);
-                return newBlock.id;
-            } else {
-                // Single enter: create dialogue block
-                const newBlockId = `block-${uuidv4()}`;
-                const newBlock: Block = {
-                    id: newBlockId,
-                    type: 'dialogue',
-                    content: textAfter.trim(),
-                };
-
-                const updatedBlocks = [...state.blocks];
-                updatedBlocks[currentIndex] = {
-                    ...currentBlock,
-                    content: textBefore.trim().toUpperCase(),
-                };
-                updatedBlocks.splice(currentIndex + 1, 0, newBlock);
-                
-                updateBlocks(updateBlockNumbers(updatedBlocks));
-                if (setHasChanges) {
-                    setHasChanges(true);
-                }
-
-                setTimeout(() => {
-                    setFocusWithRetry(newBlock.id, 'start');
-                }, 0);
-                return newBlock.id;
-            }
+            }, 0);
+            return newBlock.id;
         }
-    }
-    // ========== END CHARACTER BLOCK LOGIC ==========
 
-    // Handle dialogue block Enter behavior
-    if (currentBlock.type === 'dialogue') {
-        const currentIndex = state.blocks.findIndex(b => b.id === blockId);
-        if (currentIndex === -1) return blockId;
-
-        // Double Enter in dialogue creates an action block immediately
-        if (isDoubleEnter && textBefore.trim() === '') {
+        // Character block with content
+        if (isDoubleEnter) {
+            // Double enter: create action block
             const newBlockId = `block-${uuidv4()}`;
             const newBlock: Block = {
                 id: newBlockId,
@@ -415,56 +286,118 @@ export const useBlockHandlersImproved = (
             };
 
             const updatedBlocks = [...state.blocks];
-            if (textBefore.trim() === '' && textAfter.trim() === '') {
-              updatedBlocks.splice(currentIndex, 1, newBlock);
-            } else {
-              updatedBlocks[currentIndex] = {
-                  ...currentBlock,
-                  content: textBefore.trim(),
-              };
-              updatedBlocks.splice(currentIndex + 1, 0, newBlock);
-            }
+            updatedBlocks[currentIndex] = {
+                ...currentBlock,
+                content: textBefore.trim().toUpperCase(),
+            };
+            updatedBlocks.splice(currentIndex + 1, 0, newBlock);
             
             updateBlocks(updateBlockNumbers(updatedBlocks));
             if (setHasChanges) {
-              setHasChanges(true);
+                setHasChanges(true);
             }
 
             setTimeout(() => {
-                setFocusWithRetry(newBlock.id, 'start');
+                const el = blockRefs.current[newBlock.id];
+                if (el) {
+                    el.focus();
+                    const range = document.createRange();
+                    const textNode = el.firstChild || el;
+                    range.setStart(textNode, 0);
+                    range.collapse(true);
+                    const selection = window.getSelection();
+                    if (selection) {
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                    }
+                }
+            }, 0);
+            return newBlock.id;
+        } else {
+            // Single enter: create dialogue block
+            const newBlockId = `block-${uuidv4()}`;
+            const newBlock: Block = {
+                id: newBlockId,
+                type: 'dialogue',
+                content: textAfter.trim(),
+            };
+
+            const updatedBlocks = [...state.blocks];
+            updatedBlocks[currentIndex] = {
+                ...currentBlock,
+                content: textBefore.trim().toUpperCase(),
+            };
+            updatedBlocks.splice(currentIndex + 1, 0, newBlock);
+            
+            updateBlocks(updateBlockNumbers(updatedBlocks));
+            if (setHasChanges) {
+                setHasChanges(true);
+            }
+
+            setTimeout(() => {
+                const el = blockRefs.current[newBlock.id];
+                if (el) {
+                    el.focus();
+                    const range = document.createRange();
+                    const textNode = el.firstChild || el;
+                    range.setStart(textNode, 0);
+                    range.collapse(true);
+                    const selection = window.getSelection();
+                    if (selection) {
+                        selection.removeAllRanges();
+                        selection.addRange(range);
+                    }
+                }
             }, 0);
             return newBlock.id;
         }
+    }
+    // ========== END CHARACTER BLOCK LOGIC ==========
 
-        // Single Enter in dialogue creates a character block (NEW BEHAVIOR)
-        // Mark this character block as created after dialogue for special handling
-        const newCharacterBlockId = `block-${uuidv4()}`;
-        const newCharacterBlock: Block = {
-            id: newCharacterBlockId,
-            type: 'character',
+    // Double Enter in dialogue creates an action block immediately
+    if (isDoubleEnter && currentBlock.type === 'dialogue' && textBefore.trim() === '') {
+        const currentIndex = state.blocks.findIndex(b => b.id === blockId);
+        if (currentIndex === -1) return blockId;
+
+        const newBlockId = `block-${uuidv4()}`;
+        const newBlock: Block = {
+            id: newBlockId,
+            type: 'action',
             content: textAfter.trim(),
         };
 
         const updatedBlocks = [...state.blocks];
-        updatedBlocks[currentIndex] = {
-            ...currentBlock,
-            content: textBefore.trim(),
-        };
-        updatedBlocks.splice(currentIndex + 1, 0, newCharacterBlock);
-        
-        // Track that this character block was created after dialogue
-        characterBlockAfterDialogue.current.add(newCharacterBlockId);
-        characterBlockEnterCount.current[newCharacterBlockId] = 0;
+        if (textBefore.trim() === '' && textAfter.trim() === '') {
+          updatedBlocks.splice(currentIndex, 1, newBlock);
+        } else {
+          updatedBlocks[currentIndex] = {
+              ...currentBlock,
+              content: textBefore.trim(),
+          };
+          updatedBlocks.splice(currentIndex + 1, 0, newBlock);
+        }
         
         updateBlocks(updateBlockNumbers(updatedBlocks));
         if (setHasChanges) {
-            setHasChanges(true);
+          setHasChanges(true);
         }
 
         setTimeout(() => {
-            setFocusWithRetry(newCharacterBlockId, 'start');
+            const el = blockRefs.current[newBlock.id];
+            if (el) {
+                el.focus();
+                const range = document.createRange();
+                const textNode = el.firstChild || el;
+                range.setStart(textNode, 0);
+                range.collapse(true);
+                const selection = window.getSelection();
+                if (selection) {
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                }
+            }
         }, 0);
-        return newCharacterBlockId;
+        return newBlock.id;
     }
 
     if (currentBlock.type === 'parenthetical') {
@@ -497,7 +430,19 @@ export const useBlockHandlersImproved = (
       }
 
       setTimeout(() => {
-          setFocusWithRetry(newBlock.id, 'start');
+          const el = blockRefs.current[newBlock.id];
+          if (el) {
+              el.focus();
+              const range = document.createRange();
+              const textNode = el.firstChild || el;
+              range.setStart(textNode, 0);
+              range.collapse(true);
+              const selection = window.getSelection();
+              if (selection) {
+                  selection.removeAllRanges();
+                  selection.addRange(range);
+              }
+          }
       }, 0);
       return newBlock.id;
     }
@@ -528,27 +473,64 @@ export const useBlockHandlersImproved = (
       setHasChanges(true);
     }
 
-    // Enhanced focus management based on block type
     setTimeout(() => {
-      if (newBlock.type === 'scene-heading') {
-        // For scene headings, set cursor to end and trigger suggestions
-        setFocusWithRetry(newBlock.id, 'end');
+      const el = blockRefs.current[newBlock.id];
+      if (el) {
+        el.focus();
         
-        // Trigger focus event for scene heading suggestions after a brief delay
-        setTimeout(() => {
-          const el = blockRefs.current[newBlock.id];
-          if (el) {
-            el.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+        if (newBlock.type === 'scene-heading') {
+          // ========== SCENE HEADING CURSOR FIX ==========
+          // Set cursor to end of text instead of beginning
+          const range = document.createRange();
+          const textNode = el.firstChild || el;
+          const textLength = textAfter.length;
+          range.setStart(textNode, textLength);
+          range.collapse(true);
+          const selection = window.getSelection();
+          if (selection) {
+            selection.removeAllRanges();
+            selection.addRange(range);
           }
-        }, 100);
-      } else {
-        // For other block types (especially action blocks), set cursor to start
-        setFocusWithRetry(newBlock.id, 'start');
+          // Trigger focus event for scene heading suggestions
+          el.dispatchEvent(new FocusEvent('focus'));
+          // ========== END SCENE HEADING CURSOR FIX ==========
+        } else {
+          // ========== ACTION BLOCK CURSOR FIX ==========
+          // For action blocks and other types, ensure proper cursor positioning
+          const range = document.createRange();
+          
+          // Ensure there's a text node to work with
+          if (!el.firstChild) {
+            const textNode = document.createTextNode(textAfter || '');
+            el.appendChild(textNode);
+          }
+          
+          const textNode = el.firstChild;
+          if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+            // Set cursor at the beginning for action blocks
+            range.setStart(textNode, 0);
+            range.collapse(true);
+          } else {
+            // Fallback: set cursor at the beginning of the element
+            range.setStart(el, 0);
+            range.collapse(true);
+          }
+          
+          const selection = window.getSelection();
+          if (selection) {
+            selection.removeAllRanges();
+            selection.addRange(range);
+          }
+          
+          // Ensure the element maintains focus
+          el.focus();
+          // ========== END ACTION BLOCK CURSOR FIX ==========
+        }
       }
     }, 0);
 
     return newBlock.id;
-  }, [state.blocks, addToHistory, updateBlocks, setHasChanges, setFocusWithRetry, blockRefs]);
+  }, [state.blocks, addToHistory, updateBlocks, setHasChanges, setFocusWithRetry]);
 
   const handleFormatChange = useCallback((type: string) => {
     if (state.activeBlock) {
@@ -698,20 +680,6 @@ export const useBlockHandlersImproved = (
     
     if (!currentBlock) return;
 
-    // Clean up tracking for character blocks that are being removed or changed
-    if (characterBlockAfterDialogue.current.has(id)) {
-      if (newContent.trim() === '' || (forcedType && forcedType !== 'character')) {
-        // Block is being removed or changed to a different type
-        characterBlockAfterDialogue.current.delete(id);
-        delete characterBlockEnterCount.current[id];
-      } else if (currentBlock.type === 'character' && newContent.trim().length > 0 && currentBlock.content.trim() === '') {
-        // Character block just got content (likely from suggestion selection)
-        // Remove from special tracking since user has selected a character
-        characterBlockAfterDialogue.current.delete(id);
-        delete characterBlockEnterCount.current[id];
-      }
-    }
-
     if (newContent.trim() === '' && state.blocks.length > 1 && !forcedType) {
       addToHistory(state.blocks);
       const updatedBlocks = state.blocks.filter((_, index) => index !== currentBlockIndex);
@@ -844,285 +812,46 @@ export const useBlockHandlersImproved = (
       };
       updatedBlocks.splice(currentBlockIndex + 1, 0, dialogueBlock);
       blockToFocusId = dialogueBlockId;
-    } else if (currentBlock.type === 'character' && newContent.trim() && currentBlock.content.trim() === '') {
-      // Character block just got content (e.g., from suggestion selection)
-      // Check if there's already a dialogue block after this character block
-      const nextBlockIndex = currentBlockIndex + 1;
-      const nextBlock = state.blocks[nextBlockIndex];
-      
-      if (!nextBlock || nextBlock.type !== 'dialogue') {
-        // Create a new dialogue block
-        const dialogueBlockId = `block-${uuidv4()}`;
-        const dialogueBlock: Block = {
-            id: dialogueBlockId,
-            type: 'dialogue',
-            content: '',
-        };
-        updatedBlocks.splice(currentBlockIndex + 1, 0, dialogueBlock);
-        blockToFocusId = dialogueBlockId;
-      } else {
-        // Focus the existing dialogue block
-        blockToFocusId = nextBlock.id;
-      }
     }
 
     updateBlocks(updateBlockNumbers(updatedBlocks));
     
     if (blockToFocusId) {
       setTimeout(() => {
-        setFocusWithRetry(blockToFocusId!, 'start');
-      }, 0);
-    }
-  }, [state.blocks, addToHistory, updateBlocks, setHasChanges, projectId, screenplayId, onSceneHeadingUpdate, setFocusWithRetry]);
-
-  const handleCopyMultiBlockSelection = useCallback(() => {
-    if (!multiBlockSelection.current.startBlock || 
-        !multiBlockSelection.current.endBlock || 
-        !multiBlockSelection.current.selectedText) {
-      return;
-    }
-
-    const selectedText = multiBlockSelection.current.selectedText;
-    const formattedText = selectedText;
-    
-    navigator.clipboard.writeText(formattedText).catch(err => {
-      console.error('Failed to copy text: ', err);
-    });
-  }, []);
-
-  const handleCutMultiBlockSelection = useCallback(() => {
-    if (!multiBlockSelection.current.startBlock || 
-        !multiBlockSelection.current.endBlock || 
-        !multiBlockSelection.current.selectedText) {
-      return;
-    }
-
-    // Copy the selection first
-    handleCopyMultiBlockSelection();
-    addToHistory(state.blocks);
-    
-    const startIdx = state.blocks.findIndex(b => b.id === multiBlockSelection.current.startBlock);
-    const endIdx = state.blocks.findIndex(b => b.id === multiBlockSelection.current.endBlock);
-    
-    if (startIdx === -1 || endIdx === -1) return;
-    
-    // Remove the selected blocks
-    const [minIndex, maxIndex] = startIdx <= endIdx ? [startIdx, endIdx] : [endIdx, startIdx];
-    const updatedBlocks = [
-      ...state.blocks.slice(0, minIndex),
-      ...state.blocks.slice(maxIndex + 1)
-    ];
-    
-    updateBlocks(updatedBlocks);
-    if (setHasChanges) {
-      setHasChanges(true);
-    }
-    
-    // Clear selection
-    setSelectedBlocks(new Set());
-    
-    // Focus the block before the cut selection, or the first block if cutting from the beginning
-    const focusIndex = Math.max(0, minIndex - 1);
-    if (updatedBlocks.length > 0 && updatedBlocks[focusIndex]) {
-      setTimeout(() => {
-        setFocusWithRetry(updatedBlocks[focusIndex].id, 'end');
-      }, 0);
-    }
-    
-    multiBlockSelection.current = {
-      startBlock: null,
-      startOffset: 0,
-      endBlock: null,
-      endOffset: 0,
-      selectedText: '',
-      selectedBlocks: []
-    };
-  }, [addToHistory, handleCopyMultiBlockSelection, state.blocks, updateBlocks, setHasChanges, setSelectedBlocks, setFocusWithRetry]);
-
-  // Enhanced copy function that preserves block metadata
-  const handleCopySelectedBlocks = useCallback(() => {
-    if (state.selectedBlocks.size === 0) return;
-    
-    const selectedBlockIds = Array.from(state.selectedBlocks);
-    const selectedBlocks = state.blocks.filter(block => selectedBlockIds.includes(block.id));
-    
-    // Sort blocks by their order in the document
-    selectedBlocks.sort((a, b) => {
-      const aIndex = state.blocks.findIndex(block => block.id === a.id);
-      const bIndex = state.blocks.findIndex(block => block.id === b.id);
-      return aIndex - bIndex;
-    });
-    
-    // Create clipboard data with both text and structured data
-    const clipboardData: ClipboardData = {
-      blocks: selectedBlocks,
-      text: selectedBlocks.map(block => block.content).join('\n\n'),
-      timestamp: Date.now()
-    };
-    
-    // Store in both clipboard and a custom data attribute for internal use
-    navigator.clipboard.writeText(clipboardData.text).catch(err => {
-      console.error('Failed to copy text: ', err);
-    });
-    
-    // Store structured data in sessionStorage for internal paste operations
-    try {
-      sessionStorage.setItem('screenplay-clipboard', JSON.stringify(clipboardData));
-    } catch (err) {
-      console.error('Failed to store clipboard data:', err);
-    }
-    
-    // Update multi-block selection for consistency
-    if (selectedBlocks.length > 0) {
-      multiBlockSelection.current = {
-        startBlock: selectedBlocks[0].id,
-        startOffset: 0,
-        endBlock: selectedBlocks[selectedBlocks.length - 1].id,
-        endOffset: selectedBlocks[selectedBlocks.length - 1].content.length,
-        selectedText: clipboardData.text,
-        selectedBlocks: selectedBlocks
-      };
-    }
-  }, [state.selectedBlocks, state.blocks]);
-
-  // Enhanced cut function
-  const handleCutSelectedBlocks = useCallback(() => {
-    if (state.selectedBlocks.size === 0) return;
-    
-    // Copy first
-    handleCopySelectedBlocks();
-    addToHistory(state.blocks);
-    
-    const selectedBlockIds = Array.from(state.selectedBlocks);
-    const updatedBlocks = state.blocks.filter(block => !selectedBlockIds.includes(block.id));
-    
-    updateBlocks(updatedBlocks);
-    if (setHasChanges) {
-      setHasChanges(true);
-    }
-    
-    // Clear selection
-    setSelectedBlocks(new Set());
-    
-    // Focus appropriate block after cut
-    if (updatedBlocks.length > 0) {
-      // Find the first remaining block after the cut position
-      const firstSelectedIndex = state.blocks.findIndex(block => selectedBlockIds.includes(block.id));
-      const focusIndex = Math.min(firstSelectedIndex, updatedBlocks.length - 1);
-      
-      setTimeout(() => {
-        setFocusWithRetry(updatedBlocks[focusIndex].id, 'start');
-      }, 0);
-    }
-  }, [state.selectedBlocks, state.blocks, handleCopySelectedBlocks, addToHistory, updateBlocks, setHasChanges, setSelectedBlocks, setFocusWithRetry]);
-
-  // Paste function that handles both text and structured block data
-  const handlePasteBlocks = useCallback(async () => {
-    if (!state.activeBlock) return;
-    
-    try {
-      // First try to get structured data from sessionStorage
-      const storedData = sessionStorage.getItem('screenplay-clipboard');
-      let clipboardData: ClipboardData | null = null;
-      
-      if (storedData) {
-        try {
-          clipboardData = JSON.parse(storedData);
-          // Validate the data is recent (within 1 hour)
-          if (clipboardData && Date.now() - clipboardData.timestamp > 3600000) {
-            clipboardData = null;
-          }
-        } catch (err) {
-          console.error('Failed to parse stored clipboard data:', err);
-        }
-      }
-      
-      // If we have structured data, use it; otherwise fall back to text
-      if (clipboardData && clipboardData.blocks.length > 0) {
-        addToHistory(state.blocks);
-        
-        const currentIndex = state.blocks.findIndex(b => b.id === state.activeBlock);
-        if (currentIndex === -1) return;
-        
-        // Create new blocks with new IDs but preserve types and content
-        const newBlocks = clipboardData.blocks.map(block => ({
-          ...block,
-          id: block.type === 'scene-heading' ? `scene-${uuidv4()}` : `block-${uuidv4()}`
-        }));
-        
-        // Insert the new blocks after the current active block
-        const updatedBlocks = [
-          ...state.blocks.slice(0, currentIndex + 1),
-          ...newBlocks,
-          ...state.blocks.slice(currentIndex + 1)
-        ];
-        
-        updateBlocks(updatedBlocks);
-        if (setHasChanges) {
-          setHasChanges(true);
-        }
-        
-        // Focus the first pasted block
-        if (newBlocks.length > 0) {
-          setTimeout(() => {
-            setFocusWithRetry(newBlocks[0].id, 'start');
-          }, 0);
-        }
-      } else {
-        // Fall back to text-based paste
-        const text = await navigator.clipboard.readText();
-        if (text.trim()) {
-          addToHistory(state.blocks);
-          
-          const currentIndex = state.blocks.findIndex(b => b.id === state.activeBlock);
-          if (currentIndex === -1) return;
-          
-          // Split text into lines and create blocks
-          const lines = text.split('\n').filter(line => line.trim());
-          const newBlocks: Block[] = lines.map(line => {
-            const detectedType = detectFormat(line) || 'action';
-            return {
-              id: detectedType === 'scene-heading' ? `scene-${uuidv4()}` : `block-${uuidv4()}`,
-              type: detectedType,
-              content: line.trim()
-            };
-          });
-          
-          // Insert the new blocks after the current active block
-          const updatedBlocks = [
-            ...state.blocks.slice(0, currentIndex + 1),
-            ...newBlocks,
-            ...state.blocks.slice(currentIndex + 1)
-          ];
-          
-          updateBlocks(updatedBlocks);
-          if (setHasChanges) {
-            setHasChanges(true);
-          }
-          
-          // Focus the first pasted block
-          if (newBlocks.length > 0) {
-            setTimeout(() => {
-              setFocusWithRetry(newBlocks[0].id, 'start');
-            }, 0);
+        const el = blockRefs.current[blockToFocusId!];
+        if (el) {
+          el.focus();
+          const range = document.createRange();
+          const textNode = el.firstChild || el;
+          range.setStart(textNode, 0);
+          range.collapse(true);
+          const selection = window.getSelection();
+          if (selection) {
+            selection.removeAllRanges();
+            selection.addRange(range);
           }
         }
-      }
-    } catch (err) {
-      console.error('Failed to paste:', err);
+      }, 0);
     }
-  }, [state.activeBlock, state.blocks, addToHistory, updateBlocks, setHasChanges, setFocusWithRetry]);
+  }, [state.blocks, addToHistory, updateBlocks, setHasChanges, projectId, screenplayId, onSceneHeadingUpdate]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>, blockId: string) => {
     const el = e.target as HTMLDivElement;
 
+    // Check if suggestions are active for this block
+    const suggestionsActive = document.querySelector('.scene-heading-suggestions-improved') !== null;
+    const currentBlock = state.blocks.find((b) => b.id === blockId);
+    const isSceneHeadingBlock = currentBlock?.type === 'scene-heading';
+
+    // If suggestions are active for scene heading blocks, don't handle Enter key
+    if (suggestionsActive && isSceneHeadingBlock && e.key === 'Enter') {
+      // Let the suggestions component handle the Enter key
+      return;
+    }
+
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
       if (e.key === 'c') {
-        // Handle copy for both multi-block selection and regular block selection
-        if (state.selectedBlocks.size > 1) {
-          e.preventDefault();
-          handleCopySelectedBlocks();
-        } else if (multiBlockSelection.current.startBlock && 
+        if (multiBlockSelection.current.startBlock && 
             multiBlockSelection.current.endBlock && 
             multiBlockSelection.current.startBlock !== multiBlockSelection.current.endBlock &&
             multiBlockSelection.current.selectedText) {
@@ -1133,11 +862,7 @@ export const useBlockHandlersImproved = (
       }
       
       if (e.key === 'x') {
-        // Handle cut for both multi-block selection and regular block selection
-        if (state.selectedBlocks.size > 1) {
-          e.preventDefault();
-          handleCutSelectedBlocks();
-        } else if (multiBlockSelection.current.startBlock && 
+        if (multiBlockSelection.current.startBlock && 
             multiBlockSelection.current.endBlock && 
             multiBlockSelection.current.startBlock !== multiBlockSelection.current.endBlock &&
             multiBlockSelection.current.selectedText) {
@@ -1145,109 +870,6 @@ export const useBlockHandlersImproved = (
           handleCutMultiBlockSelection();
         }
         return;
-      }
-      
-      if (e.key === 'v') {
-        // Handle paste
-        e.preventDefault();
-        handlePasteBlocks();
-        return;
-      }
-    }
-
-    // Handle Shift+ArrowUp and Shift+ArrowDown for multi-selection
-    if (e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-      e.preventDefault();
-      e.stopPropagation();
-
-      const currentIndex = state.blocks.findIndex(b => b.id === blockId);
-      if (currentIndex === -1) return;
-
-      if (e.key === 'ArrowUp') {
-        // Shift+ArrowUp: Extend selection upward
-        if (currentIndex > 0) {
-          const previousBlock = state.blocks[currentIndex - 1];
-          const newSelectedBlocks = new Set(state.selectedBlocks);
-          
-          // If this is the first selection with shift, add the current block too
-          if (newSelectedBlocks.size === 0) {
-            newSelectedBlocks.add(blockId);
-          }
-          
-          // Add the previous block to selection
-          newSelectedBlocks.add(previousBlock.id);
-          
-          // Update selected blocks
-          setSelectedBlocks(newSelectedBlocks);
-          
-          // Move focus to the previous block
-          setFocusWithRetry(previousBlock.id, 'start');
-        }
-      } else if (e.key === 'ArrowDown') {
-        // Shift+ArrowDown: Extend selection downward
-        if (currentIndex < state.blocks.length - 1) {
-          const nextBlock = state.blocks[currentIndex + 1];
-          const newSelectedBlocks = new Set(state.selectedBlocks);
-          
-          // If this is the first selection with shift, add the current block too
-          if (newSelectedBlocks.size === 0) {
-            newSelectedBlocks.add(blockId);
-          }
-          
-          // Add the next block to selection
-          newSelectedBlocks.add(nextBlock.id);
-          
-          // Update selected blocks
-          setSelectedBlocks(newSelectedBlocks);
-          
-          // Move focus to the next block
-          setFocusWithRetry(nextBlock.id, 'start');
-        }
-      }
-      return;
-    }
-    
-    // Handle regular ArrowUp and ArrowDown without Shift
-    if (!e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
-      // Only handle if we're at the beginning or end of the content
-      const selection = window.getSelection();
-      if (!selection || selection.rangeCount === 0) return;
-      
-      const range = selection.getRangeAt(0);
-      const content = el.textContent || '';
-      
-      // For ArrowUp, check if we're at the beginning of the content
-      if (e.key === 'ArrowUp' && range.startOffset === 0) {
-        const currentIndex = state.blocks.findIndex(b => b.id === blockId);
-        if (currentIndex > 0) {
-          e.preventDefault();
-          
-          // Clear selection unless Ctrl/Cmd is pressed
-          if (!e.ctrlKey && !e.metaKey) {
-            setSelectedBlocks(new Set());
-          }
-          
-          // Move to previous block
-          const prevBlock = state.blocks[currentIndex - 1];
-          setFocusWithRetry(prevBlock.id, 'end');
-        }
-      }
-      
-      // For ArrowDown, check if we're at the end of the content
-      if (e.key === 'ArrowDown' && range.endOffset === content.length) {
-        const currentIndex = state.blocks.findIndex(b => b.id === blockId);
-        if (currentIndex < state.blocks.length - 1) {
-          e.preventDefault();
-          
-          // Clear selection unless Ctrl/Cmd is pressed
-          if (!e.ctrlKey && !e.metaKey) {
-            setSelectedBlocks(new Set());
-          }
-          
-          // Move to next block
-          const nextBlock = state.blocks[currentIndex + 1];
-          setFocusWithRetry(nextBlock.id, 'start');
-        }
       }
     }
 
@@ -1284,220 +906,87 @@ export const useBlockHandlersImproved = (
         addToHistory(state.blocks);
         
         const previousBlock = state.blocks[currentIndex - 1];
+        const prevEl = blockRefs.current[previousBlock.id];
+
         const updatedBlocks = state.blocks.filter((b) => b.id !== blockId);
         updateBlocks(updatedBlocks);
 
-        setTimeout(() => {
-          setFocusWithRetry(previousBlock.id, 'end');
-        }, 0);
-      }
-    }
-  }, [state.blocks, state.selectedBlocks, handleEnterKey, handleFormatChange, addToHistory, updateBlocks, setHasChanges, setFocusWithRetry, setSelectedBlocks, handleCopySelectedBlocks, handleCutSelectedBlocks, handlePasteBlocks, handleCopyMultiBlockSelection, handleCutMultiBlockSelection]);
-
-  // Helper function to get block element by ID
-  const getBlockElement = useCallback((blockId: string): HTMLElement | null => {
-    return blockRefs.current[blockId] || document.querySelector(`[data-block-id="${blockId}"]`);
-  }, [blockRefs]);
-
-  // Get all blocks between two block IDs
-  const getBlocksBetween = useCallback((startBlockId: string, endBlockId: string): string[] => {
-    const startIndex = state.blocks.findIndex(b => b.id === startBlockId);
-    const endIndex = state.blocks.findIndex(b => b.id === endBlockId);
-    
-    if (startIndex === -1 || endIndex === -1) return [];
-    
-    const [minIndex, maxIndex] = startIndex <= endIndex 
-      ? [startIndex, endIndex] 
-      : [endIndex, startIndex];
-    
-    return state.blocks
-      .slice(minIndex, maxIndex + 1)
-      .map(block => block.id);
-  }, [state.blocks]);
-
-  // Function to serialize selected blocks for clipboard
-  const serializeBlocks = useCallback((blockIds: string[]): string => {
-    const selectedBlocks = state.blocks.filter(block => blockIds.includes(block.id));
-    
-    // Simple serialization - just join the content with newlines
-    // In a real implementation, you might want to use JSON or a custom format
-    // that preserves block types and other metadata
-    return selectedBlocks.map(block => block.content).join('\n\n');
-  }, [state.blocks]);
-
-  // Handle mouse down to start drag selection
-  const handleMouseDown = useCallback((id: string, e: React.MouseEvent) => {
-    if (e.button !== 0) return; // Only handle left mouse button
-
-    const target = e.target as HTMLElement;
-    const isContentEditable = target.hasAttribute('contenteditable') || target.closest('[contenteditable="true"]');
-    
-    lastMousePosition.current = { x: e.clientX, y: e.clientY };
-
-    // Check if suggestions are currently showing for this block
-    const suggestionElements = document.querySelectorAll('.scene-heading-suggestions-improved, .transition-suggestions, .shot-type-suggestions, .character-suggestions, .element-suggestions');
-    const hasSuggestionsOpen = suggestionElements.length > 0;
-
-    // If clicking on contentEditable and not holding Ctrl/Cmd, allow normal text selection
-    if (isContentEditable && !e.ctrlKey && !e.metaKey && !hasSuggestionsOpen) {
-      // Check if this is a click in empty space around the text (for block selection)
-      const rect = target.getBoundingClientRect();
-      const clickX = e.clientX - rect.left;
-      const clickY = e.clientY - rect.top;
-      
-      // If clicking in the padding area (not on text), treat as block selection
-      const textContent = target.textContent || '';
-      const hasText = textContent.trim().length > 0;
-      
-      // For empty blocks or clicks in padding, allow block selection
-      if (!hasText || clickX < 10 || clickX > rect.width - 10) {
-        // This is a block selection, not text selection
-        e.preventDefault();
-      } else {
-        // This is text selection within the block
-        isTextSelection.current = true;
-        selectionStartBlock.current = id;
-        
-        const selection = window.getSelection();
-        if (selection && selection.rangeCount > 0) {
-          const range = selection.getRangeAt(0);
-          selectionStartOffset.current = range.startOffset;
+        if (prevEl) {
+          prevEl.focus();
+          const range = document.createRange();
           
-          multiBlockSelection.current = {
-            startBlock: id,
-            startOffset: range.startOffset,
-            endBlock: id,
-            endOffset: range.startOffset,
-            selectedText: '',
-            selectedBlocks: []
-          };
-        }
-        return;
-      }
-    }
-
-    // Start drag selection
-    e.preventDefault();
-    isDragSelecting.current = true;
-    dragStartBlock.current = id;
-    dragStartPosition.current = { x: e.clientX, y: e.clientY };
-    dragCurrentPosition.current = { x: e.clientX, y: e.clientY };
-    
-    // Clear existing selection unless Shift is pressed
-    if (!e.shiftKey) {
-      setSelectedBlocks(new Set([id]));
-    } else {
-      // Add to existing selection if Shift is pressed
-      setSelectedBlocks(prev => {
-        const newSet = new Set(prev);
-        newSet.add(id);
-        return newSet;
-      });
-    }
-    
-    // Create selection overlay element
-    const overlay = document.createElement('div');
-    overlay.id = 'drag-selection-overlay';
-    overlay.style.position = 'fixed';
-    overlay.style.border = '1px solid #E86F2C';
-    overlay.style.backgroundColor = 'rgba(232, 111, 44, 0.1)';
-    overlay.style.pointerEvents = 'none';
-    overlay.style.zIndex = '1000';
-    document.body.appendChild(overlay);
-    
-    // Add mousemove and mouseup event listeners to document
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragSelecting.current) return;
-      
-      dragCurrentPosition.current = { x: e.clientX, y: e.clientY };
-      
-      // Update selection overlay
-      const overlay = document.getElementById('drag-selection-overlay');
-      if (overlay) {
-        const left = Math.min(dragStartPosition.current.x, dragCurrentPosition.current.x);
-        const top = Math.min(dragStartPosition.current.y, dragCurrentPosition.current.y);
-        const width = Math.abs(dragCurrentPosition.current.x - dragStartPosition.current.x);
-        const height = Math.abs(dragCurrentPosition.current.y - dragStartPosition.current.y);
-        
-        overlay.style.left = `${left}px`;
-        overlay.style.top = `${top}px`;
-        overlay.style.width = `${width}px`;
-        overlay.style.height = `${height}px`;
-      }
-      
-      // Find blocks that intersect with the selection rectangle
-      const selectionRect = {
-        left: Math.min(dragStartPosition.current.x, dragCurrentPosition.current.x),
-        top: Math.min(dragStartPosition.current.y, dragCurrentPosition.current.y),
-        right: Math.max(dragStartPosition.current.x, dragCurrentPosition.current.x),
-        bottom: Math.max(dragStartPosition.current.y, dragCurrentPosition.current.y)
-      };
-      
-      // Get all block elements
-      const blockElements = document.querySelectorAll('[data-block-id]');
-      const selectedIds = new Set<string>();
-      
-      // Check each block for intersection with selection rectangle
-      blockElements.forEach(element => {
-        const rect = element.getBoundingClientRect();
-        
-        // Check if the block intersects with the selection rectangle
-        if (rect.left < selectionRect.right && 
-            rect.right > selectionRect.left && 
-            rect.top < selectionRect.bottom && 
-            rect.bottom > selectionRect.top) {
+          if (!prevEl.firstChild) {
+            prevEl.textContent = '';
+          }
           
-          const blockId = element.getAttribute('data-block-id');
-          if (blockId) {
-            selectedIds.add(blockId);
+          const textNode = prevEl.firstChild || prevEl;
+          const position = previousBlock.content.length;
+          
+          try {
+            range.setStart(textNode, position);
+            range.setEnd(textNode, position);
+            
+            const selection = window.getSelection();
+            if (selection) {
+              selection.removeAllRanges();
+              selection.addRange(range);
+            }
+          } catch (err) {
+            range.selectNodeContents(prevEl);
+            range.collapse(false);
+            
+            const selection = window.getSelection();
+            if (selection) {
+              selection.removeAllRanges();
+              selection.addRange(range);
+            }
           }
         }
-      });
-      
-      // Update selected blocks
-      if (selectedIds.size > 0) {
-        setSelectedBlocks(selectedIds);
-        dragSelectionBlocks.current = selectedIds;
       }
-    };
+    }
+  }, [state.blocks, handleEnterKey, handleFormatChange, addToHistory, updateBlocks, setHasChanges]);
+
+  const handleCopyMultiBlockSelection = useCallback(() => {
+    if (!multiBlockSelection.current.startBlock || 
+        !multiBlockSelection.current.endBlock || 
+        !multiBlockSelection.current.selectedText) {
+      return;
+    }
+
+    const selectedText = multiBlockSelection.current.selectedText;
+    const formattedText = selectedText;
     
-    const handleMouseUp = () => {
-      isDragSelecting.current = false;
-      
-      // Remove selection overlay
-      const overlay = document.getElementById('drag-selection-overlay');
-      if (overlay) {
-        document.body.removeChild(overlay);
-      }
-      
-      // Remove event listeners
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      
-      // If we have selected blocks, prepare for copy/cut operations
-      if (dragSelectionBlocks.current.size > 0) {
-        const blockIds = Array.from(dragSelectionBlocks.current);
-        if (blockIds.length > 1) {
-          // Find the first and last block in the selection
-          const firstBlockId = blockIds[0];
-          const lastBlockId = blockIds[blockIds.length - 1];
-          
-          // Set up multi-block selection for copy/cut operations
-          multiBlockSelection.current = {
-            startBlock: firstBlockId,
-            startOffset: 0,
-            endBlock: lastBlockId,
-            endOffset: state.blocks.find(b => b.id === lastBlockId)?.content.length || 0,
-            selectedText: serializeBlocks(blockIds),
-            selectedBlocks: state.blocks.filter(b => blockIds.includes(b.id))
-          };
-        }
-      }
-    };
+    navigator.clipboard.writeText(formattedText).catch(err => {
+      console.error('Failed to copy text: ', err);
+    });
+  }, []);
+
+  const handleCutMultiBlockSelection = useCallback(() => {
+    if (!multiBlockSelection.current.startBlock || 
+        !multiBlockSelection.current.endBlock || 
+        !multiBlockSelection.current.selectedText) {
+      return;
+    }
+
+    handleCopyMultiBlockSelection();
+    addToHistory(state.blocks);
     
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  }, [state.blocks, setSelectedBlocks, serializeBlocks]);
+    const startIdx = state.blocks.findIndex(b => b.id === multiBlockSelection.current.startBlock);
+    const endIdx = state.blocks.findIndex(b => b.id === multiBlockSelection.current.endBlock);
+    
+    if (startIdx === -1 || endIdx === -1) return;
+    
+    const selection = window.getSelection();
+    if (!selection) return;
+    
+    multiBlockSelection.current = {
+      startBlock: null,
+      startOffset: 0,
+      endBlock: null,
+      endOffset: 0,
+      selectedText: ''
+    };
+  }, [addToHistory, handleCopyMultiBlockSelection, state.blocks]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1540,45 +1029,6 @@ export const useBlockHandlersImproved = (
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [state.selectedBlocks, setSelectedBlocks]);
 
-  // Add click-outside-to-deselect functionality
-  useEffect(() => {
-    const handleDocumentClick = (e: MouseEvent) => {
-      // Check if the click is outside the screenplay editor area
-      const target = e.target as HTMLElement;
-      
-      // Don't deselect if clicking on:
-      // 1. A block element or its children
-      // 2. The screenplay content area
-      // 3. Format buttons or other UI elements
-      // 4. Suggestion dropdowns
-      const isBlockClick = target.closest('[data-block-id]');
-      const isScreenplayContent = target.closest('[data-screenplay-content="true"]');
-      const isScreenplayEditor = target.closest('[data-screenplay-editor="true"]');
-      const isFormatButton = target.closest('.format-buttons');
-      const isSuggestionDropdown = target.closest('.scene-heading-suggestions-improved, .transition-suggestions, .shot-type-suggestions, .character-suggestions, .element-suggestions');
-      
-      // If clicking outside all screenplay-related elements, deselect
-      if (!isBlockClick && !isScreenplayContent && !isScreenplayEditor && !isFormatButton && !isSuggestionDropdown) {
-        if (state.selectedBlocks.size > 0) {
-          setSelectedBlocks(new Set());
-          
-          // Also clear multi-block selection
-          multiBlockSelection.current = {
-            startBlock: null,
-            startOffset: 0,
-            endBlock: null,
-            endOffset: 0,
-            selectedText: '',
-            selectedBlocks: []
-          };
-        }
-      }
-    };
-
-    document.addEventListener('click', handleDocumentClick);
-    return () => document.removeEventListener('click', handleDocumentClick);
-  }, [state.selectedBlocks, setSelectedBlocks]);
-
   const handleBlockClick = useCallback((id: string, e: React.MouseEvent) => {
     if (isTextSelection.current) return;
 
@@ -1613,25 +1063,43 @@ export const useBlockHandlersImproved = (
     }
   }, [state.blocks, setSelectedBlocks]);
 
-  // Add a clear selection function that can be called externally
+  const handleMouseDown = useCallback((id: string, e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+
+    const target = e.target as HTMLElement;
+    const isContentEditable = target.hasAttribute('contenteditable');
+    
+    lastMousePosition.current = { x: e.clientX, y: e.clientY };
+
+    if (isContentEditable) {
+      isTextSelection.current = true;
+      selectionStartBlock.current = id;
+      
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        selectionStartOffset.current = range.startOffset;
+        
+        multiBlockSelection.current = {
+          startBlock: id,
+          startOffset: range.startOffset,
+          endBlock: id,
+          endOffset: range.startOffset,
+          selectedText: ''
+        };
+      }
+      return;
+    }
+
+    e.preventDefault();
+    isDragging.current = true;
+    dragStartBlock.current = id;
+    dragEndBlock.current = id;
+  }, []);
+
   const clearSelection = useCallback(() => {
     setSelectedBlocks(new Set());
-    
-    // Clear multi-block selection
-    multiBlockSelection.current = {
-      startBlock: null,
-      startOffset: 0,
-      endBlock: null,
-      endOffset: 0,
-      selectedText: '',
-      selectedBlocks: []
-    };
   }, [setSelectedBlocks]);
-
-  // Function to check if a character block was created after dialogue
-  const isCharacterBlockAfterDialogue = useCallback((blockId: string): boolean => {
-    return characterBlockAfterDialogue.current.has(blockId);
-  }, []);
 
   return {
     handleContentChange,
