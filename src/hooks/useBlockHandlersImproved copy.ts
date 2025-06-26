@@ -215,26 +215,16 @@ export const useBlockHandlersImproved = (
 
     addToHistory(state.blocks);
 
-    // Special handling for transitions: create scene heading + action block sequence
+    // Special handling for transitions: immediately create a new scene heading block
     if (currentBlock.type === 'transition') {
         const newSceneId = `scene-${uuidv4()}`;
-        const actionBlockId = `action-${uuidv4()}`;
         
-        // Create scene heading block with smart default
-        const sceneHeadingBlock: Block = {
+        const newBlock: Block = {
             id: newSceneId,
             type: 'scene-heading',
-            content: 'INT. LOCATION - DAY',
-        };
-
-        // Create action block immediately after scene heading
-        const actionBlock: Block = {
-            id: actionBlockId,
-            type: 'action',
             content: '',
         };
 
-        // Insert both blocks and focus action block for immediate writing
         const updatedBlocks = [...state.blocks];
         const currentIndex = state.blocks.findIndex((b) => b.id === blockId);
         
@@ -250,18 +240,17 @@ export const useBlockHandlersImproved = (
           };
         }
 
-        updatedBlocks.splice(currentIndex + 1, 0, sceneHeadingBlock, actionBlock);
+        updatedBlocks.splice(currentIndex + 1, 0, newBlock);
         updateBlocks(updateBlockNumbers(updatedBlocks));
 
         if (setHasChanges) {
             setHasChanges(true);
         }
 
-        // Focus the action block so user can start writing immediately
         setTimeout(() => {
-            setFocusWithRetry(actionBlock.id, 'start');
+            setFocusWithRetry(newBlock.id, 'start');
         }, 0);
-        return actionBlock.id;
+        return newBlock.id;
     }
 
     // ========== CHARACTER BLOCK LOGIC ==========
