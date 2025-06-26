@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transition Block Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .block {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 4px;
+        }
+        .block[contenteditable="true"] {
+            outline: 2px solid #E86F2C;
+        }
+        .transition {
+            text-align: right;
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+        .scene-heading {
+            text-transform: uppercase;
+            font-weight: bold;
+            margin-top: 20px;
+        }
+        .action {
+            margin: 10px 0;
+        }
+        .instructions {
+            background: #e8f4f8;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        .debug {
+            background: #fff3cd;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Transition Block Enter Key Test</h1>
+    
+    <div class="instructions">
+        <h3>Test Instructions:</h3>
+        <ol>
+            <li>Click on the transition block below (FADE OUT:)</li>
+            <li>Position your cursor at the end of the text</li>
+            <li>Press <strong>Enter</strong></li>
+            <li>Check if a new scene heading and action block are created</li>
+        </ol>
+        <p><strong>Expected Result:</strong> Should create "INT. LOCATION - DAY" scene heading followed by an empty action block, with focus on the action block.</p>
+    </div>
+
+    <div id="debug-log" class="debug">Debug Log: Ready for testing...</div>
+
+    <div class="screenplay-content">
+        <div class="block action" contenteditable="true" data-block-id="action-1" data-block-type="action">
+            The character walks through the door.
+        </div>
+        
+        <div class="block transition" contenteditable="true" data-block-id="transition-1" data-block-type="transition">
+            FADE OUT:
+        </div>
+    </div>
+
+    <script>
+        // Simple block management for testing
+        let blockCounter = 2;
+        
+        function generateId(type) {
+            return `${type}-${++blockCounter}`;
+        }
+        
+        function addDebugLog(message) {
+            const debugLog = document.getElementById('debug-log');
+            const timestamp = new Date().toLocaleTimeString();
+            debugLog.innerHTML += `<br>[${timestamp}] ${message}`;
+            debugLog.scrollTop = debugLog.scrollHeight;
+        }
+        
+        function createBlock(type, content = '', insertAfter = null) {
+            const block = document.createElement('div');
+            const blockId = generateId(type);
+            
+            block.className = `block ${type}`;
+            block.contentEditable = true;
+            block.setAttribute('data-block-id', blockId);
+            block.setAttribute('data-block-type', type);
+            block.textContent = content;
+            
+            if (insertAfter) {
+                insertAfter.parentNode.insertBefore(block, insertAfter.nextSibling);
+            } else {
+                document.querySelector('.screenplay-content').appendChild(block);
+            }
+            
+            addDebugLog(`Created ${type} block: ${blockId} with content: "${content}"`);
+            return block;
+        }
+        
+        function focusBlock(block, position = 'start') {
+            block.focus();
+            
+            // Set cursor position
+            const range = document.createRange();
+            const selection = window.getSelection();
+            
+            if (!block.firstChild) {
+                const textNode = document.createTextNode('');
+                block.appendChild(textNode);
+            }
+            
+            let textNode = block.firstChild;
+            while (textNode && textNode.nodeType !== Node.TEXT_NODE) {
+                textNode = textNode.firstChild || textNode.nextSibling;
+            }
+            
+            if (!textNode) {
+                textNode = document.createTextNode('');
+                block.appendChild(textNode);
+            }
+            
+            const textContent = textNode.textContent || '';
+            const pos = position === 'start' ? 0 : textContent.length;
+            
+            range.setStart(textNode, pos);
+            range.setEnd(textNode, pos);
+            
+            selection.removeAllRanges();
+            selection.addRange(range);
+            
+            addDebugLog(`Focused block ${block.getAttribute('data-block-id')} at ${position}`);
+        }
+        
+        function handleTransitionEnter(transitionBlock) {
+            addDebugLog('Transition block detected, creating new scene...');
+            
+            const sceneHeadingBlock = createBlock('scene-heading', 'INT. LOCATION - DAY', transitionBlock);
+            const actionBlock = createBlock('action', '', sceneHeadingBlock);
+            
+            addDebugLog('Created scene heading and action blocks');
+            
+            // Focus the action block
+            setTimeout(() => {
+                focusBlock(actionBlock, 'start');
+                addDebugLog('Focused action block for continued writing');
+            }, 50);
+            
+            return actionBlock;
+        }
+        
+        // Add event listeners to all blocks
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                const target = e.target;
+                const blockType = target.getAttribute('data-block-type');
+                const blockId = target.getAttribute('data-block-id');
+                
+                addDebugLog(`Enter pressed in ${blockType} block: ${blockId}`);
+                
+                if (blockType === 'transition') {
+                    e.preventDefault();
+                    addDebugLog('Preventing default Enter behavior for transition');
+                    handleTransitionEnter(target);
+                }
+            }
+        });
+        
+        // Add focus event listeners for debugging
+        document.addEventListener('focus', function(e) {
+            const target = e.target;
+            if (target.hasAttribute('data-block-id')) {
+                const blockType = target.getAttribute('data-block-type');
+                const blockId = target.getAttribute('data-block-id');
+                addDebugLog(`Focused ${blockType} block: ${blockId}`);
+            }
+        }, true);
+        
+        addDebugLog('Test page loaded and ready');
+    </script>
+</body>
+</html>
