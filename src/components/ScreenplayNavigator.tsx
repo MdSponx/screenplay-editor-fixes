@@ -229,30 +229,22 @@ const ScreenplayNavigator: React.FC<ScreenplayNavigatorProps> = ({
               ))}
             </div>
             
-            {/* Enhanced Save Button */}
+            {/* Save Button */}
             <button
               onClick={handleSave}
               disabled={isSaving || !hasChanges}
-              className={`px-4 py-2 rounded-lg transition-all duration-200 flex items-center relative ${
+              className={`px-4 py-2 rounded-lg transition-all duration-200 flex items-center ${
                 hasChanges
-                  ? 'bg-gradient-to-r from-[#2563eb] via-[#9333ea] to-[#db2777] text-white hover:opacity-90 shadow-lg'
+                  ? 'bg-gradient-to-r from-[#2563eb] via-[#9333ea] to-[#db2777] text-white hover:opacity-90'
                   : 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500'
               } ${!hasChanges ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               {isSaving ? (
-                <>
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
-                  <span>Saving...</span>
-                </>
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
               ) : (
-                <>
-                  <Save size={18} className="mr-2" />
-                  <span>{hasChanges ? 'Save Changes' : 'Saved'}</span>
-                  {hasChanges && (
-                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
-                  )}
-                </>
+                <Save size={18} className="mr-2" />
               )}
+              <span>Save</span>
             </button>
             
             {/* Display Options Button */}

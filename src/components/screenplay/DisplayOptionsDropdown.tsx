@@ -1,8 +1,6 @@
 import React from 'react';
 import { ZoomIn, ZoomOut, Languages, Moon, Sun } from 'lucide-react';
 
-type Language = 'en' | 'th' | 'zh';
-
 interface DisplayOptionsDropdownProps {
   isDarkMode: boolean;
   toggleDarkMode: () => void;
@@ -11,8 +9,8 @@ interface DisplayOptionsDropdownProps {
   MIN_ZOOM: number;
   MAX_ZOOM: number;
   ZOOM_STEP: number;
-  language: Language;
-  setLanguage: (lang: Language) => void;
+  language: string;
+  setLanguage: (lang: string) => void;
   onClose: () => void;
 }
 
@@ -36,8 +34,8 @@ const DisplayOptionsDropdown: React.FC<DisplayOptionsDropdownProps> = ({
     setZoomLevel(Math.max(zoomLevel - ZOOM_STEP, MIN_ZOOM));
   };
 
-  const getNextLanguage = (current: Language): Language => {
-    const languages: Language[] = ['en', 'th', 'zh'];
+  const getNextLanguage = (current: string) => {
+    const languages = ['en', 'th', 'zh'];
     const currentIndex = languages.indexOf(current);
     return languages[(currentIndex + 1) % languages.length];
   };

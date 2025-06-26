@@ -354,21 +354,8 @@ const BlockComponentImproved: React.FC<ExtendedBlockComponentProps> = ({
       return;
     }
     
-    // CRITICAL: Special handling for transition blocks - ALWAYS allow Enter key to pass through
-    // This must come before any other Enter key handling to ensure it works regardless of suggestions
-    if (block.type === 'transition' && e.key === 'Enter') {
-      // Close any open suggestions first
-      if (showSuggestions) {
-        closeSuggestions();
-      }
-      // For transition blocks, always pass Enter to parent handler for scene creation
-      onKeyDown(e, block.id);
-      return;
-    }
-    
     // If suggestions are showing and this is a navigation/selection key, prevent parent handling
-    // BUT exclude transition blocks from this logic since they're handled above
-    if (showSuggestions && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(e.key) && block.type !== 'transition') {
+    if (showSuggestions && ['ArrowUp', 'ArrowDown', 'Enter', 'Escape'].includes(e.key)) {
       // Stop the event from bubbling to parent components
       e.stopPropagation();
       // Don't call onKeyDown for these keys when suggestions are active
@@ -386,7 +373,7 @@ const BlockComponentImproved: React.FC<ExtendedBlockComponentProps> = ({
         updateSuggestionsPosition();
       }, 0);
     }
-  }, [showSuggestions, onKeyDown, block.id, updateSuggestionsPosition, isProcessingSelection, block.type, closeSuggestions]);
+  }, [showSuggestions, onKeyDown, block.id, updateSuggestionsPosition, isProcessingSelection]);
 
   // Enhanced input handling - Fixed to use contentElement ref instead of event target
   const handleInput = useCallback((e: React.FormEvent<HTMLDivElement>) => {

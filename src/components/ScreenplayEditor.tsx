@@ -3,10 +3,9 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useEditorState } from '../hooks/useEditorState';
 import { useBlockHandlersImproved } from '../hooks/useBlockHandlersImproved';
 import { useAutoScroll } from '../hooks/useAutoScroll';
-import { useEnhancedScreenplaySave } from '../hooks/useEnhancedScreenplaySave';
+import { useScreenplaySave } from '../hooks/useScreenplaySave';
 import { useCharacterTracking } from '../hooks/useCharacterTracking';
 import { useSceneHeadings } from '../hooks/useSceneHeadings';
-import { useScenes } from '../hooks/useScenes';
 import { organizeBlocksIntoPages } from '../utils/blockUtils';
 import { doc, getDoc, setDoc, collection, getDocs, query, orderBy, where, updateDoc, limit, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -21,7 +20,7 @@ import ScreenplayNavigator from './ScreenplayNavigator';
 import SceneNavigator from './SceneNavigator/SceneNavigator';
 import CharacterManager from './CharacterManager/CharacterManager';
 import type { Block, PersistedEditorState, CharacterDocument, SceneDocument, UniqueSceneHeadingDocument } from '../types';
-import { Layers, Users, Type, RefreshCw } from 'lucide-react';
+import { Layers, Users, Type } from 'lucide-react';
 
 const ScreenplayEditor: React.FC = () => {
   const { projectId, screenplayId } = useParams();
@@ -39,13 +38,9 @@ const ScreenplayEditor: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'scenes' | 'characters' | 'headings'>('scenes');
   const [showPanel, setShowPanel] = useState(true);
   const [isSceneSelectionActive, setIsSceneSelectionActive] = useState(false);
-  const [isReorganizingScenes, setIsReorganizingScenes] = useState(false);
 
   const screenplayData = location.state?.screenplayData;
   const initialBlocks = location.state?.blocks || [];
-
-  // Add real-time scene order synchronization
-  const { scenes, loading: scenesLoading, error: scenesError } = useScenes(projectId || '', screenplayId || '');
 
   const {
     state,
@@ -60,16 +55,12 @@ const ScreenplayEditor: React.FC = () => {
   const blockRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const {
-    saveState,
     isSaving,
     hasChanges,
     error: saveError,
     handleSave,
-    setHasChanges,
-    getStatusMessage,
-    toggleAutoSave,
-    clearError
-  } = useEnhancedScreenplaySave(projectId || '', screenplayId || '', user?.id || '', state.blocks, state.activeBlock);
+    setHasChanges
+  } = useScreenplaySave(projectId || '', screenplayId || '', user?.id || '', state.blocks, state.activeBlock);
 
   // Initialize character tracking
   const {
@@ -103,96 +94,6 @@ const ScreenplayEditor: React.FC = () => {
       setCharacters(trackedCharacters);
     }
   }, [trackedCharacters]);
-
-  // Function to reorganize blocks based on scene order
-  const reorganizeBlocksBySceneOrder = useCallback((newScenes: typeof scenes) => {
-    if (!newScenes.length || !state.blocks.length) return;
-
-    console.log('Reorganizing blocks based on new scene order...');
-    setIsReorganizingScenes(true);
-
-    try {
-      const newBlocks: Block[] = [];
-      
-      // Create a map of scene ID to scene blocks for quick lookup
-      const sceneBlocksMap = new Map<string, Block[]>();
-      
-      // Group current blocks by scene
-      let currentSceneId: string | null = null;
-      let currentSceneBlocks: Block[] = [];
-      
-      state.blocks.forEach(block => {
-        if (block.type === 'scene-heading') {
-          // Save previous scene blocks if any
-          if (currentSceneId && currentSceneBlocks.length > 0) {
-            sceneBlocksMap.set(currentSceneId, [...currentSceneBlocks]);
-          }
-          
-          // Start new scene
-          currentSceneId = block.id;
-          currentSceneBlocks = [];
-        } else if (currentSceneId) {
-          // Add block to current scene
-          currentSceneBlocks.push(block);
-        }
-      });
-      
-      // Don't forget the last scene
-      if (currentSceneId && currentSceneBlocks.length > 0) {
-        sceneBlocksMap.set(currentSceneId, [...currentSceneBlocks]);
-      }
-      
-      // Rebuild blocks array in new scene order
-      newScenes.forEach((scene, index) => {
-        // Add scene heading block
-        newBlocks.push({
-          id: scene.id,
-          type: 'scene-heading',
-          content: scene.scene_heading || scene.title || '',
-          number: index + 1
-        });
-        
-        // Add scene's blocks
-        const sceneBlocks = sceneBlocksMap.get(scene.id) || scene.blocks || [];
-        newBlocks.push(...sceneBlocks);
-      });
-      
-      // Update the editor state with reorganized blocks
-      setState(prev => ({
-        ...prev,
-        blocks: newBlocks
-      }));
-      
-      console.log(`Reorganized ${newBlocks.length} blocks across ${newScenes.length} scenes`);
-      setHasChanges(true);
-      
-    } catch (err) {
-      console.error('Error reorganizing blocks:', err);
-    } finally {
-      setIsReorganizingScenes(false);
-    }
-  }, [state.blocks, setState, setHasChanges]);
-
-  // Watch for scene order changes and reorganize blocks accordingly
-  useEffect(() => {
-    if (!scenesLoading && scenes.length > 0 && state.blocks.length > 0 && !loading) {
-      // Check if scene order has changed by comparing with current blocks
-      const currentSceneOrder = state.blocks
-        .filter(block => block.type === 'scene-heading')
-        .map(block => block.id);
-      
-      const newSceneOrder = scenes.map(scene => scene.id);
-      
-      // Only reorganize if the order has actually changed
-      const orderChanged = currentSceneOrder.length !== newSceneOrder.length ||
-        currentSceneOrder.some((id, index) => id !== newSceneOrder[index]);
-      
-      if (orderChanged && !isReorganizingScenes) {
-        console.log('Scene order changed, reorganizing blocks...');
-        reorganizeBlocksBySceneOrder(scenes);
-      }
-    }
-  }, [scenes, scenesLoading, state.blocks, loading, isReorganizingScenes, reorganizeBlocksBySceneOrder]);
 
   const updateEditorState = useCallback(async () => {
     if (!projectId || !screenplayId || !user?.id) {
@@ -804,14 +705,6 @@ const ScreenplayEditor: React.FC = () => {
       {saveError && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-red-500 text-white px-4 py-2 rounded-lg shadow-lg">
           {saveError}
-        </div>
-      )}
-
-      {/* Scene reorganization indicator */}
-      {isReorganizingScenes && (
-        <div className="fixed bottom-4 right-4 bg-blue-500 text-white px-4 py-2 rounded-lg shadow-lg flex items-center z-50">
-          <RefreshCw size={16} className="mr-2 animate-spin" />
-          Updating scene order...
         </div>
       )}
     </div>
